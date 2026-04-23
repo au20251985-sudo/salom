@@ -37,12 +37,16 @@ export default function GameEngine({
   p2Tank?: TankModel
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const miniMapRef = useRef<HTMLCanvasElement>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const requestRef = useRef<number>(null);
   const keysPressed = useRef<{ [key: string]: boolean }>({});
+  const mousePos = useRef({ x: 0, y: 0 });
   const lastShotP1 = useRef<number>(0);
   const lastShotP2 = useRef<number>(0);
   const lastPowerupSpawn = useRef<number>(0);
+
+  const lastPullUpdateScore = useRef<number>(0);
 
   // Initialize Game
   useEffect(() => {
@@ -63,6 +67,8 @@ export default function GameEngine({
           width: GRID_SIZE,
           height: GRID_SIZE,
           direction: 'UP' as Direction,
+          angle: 0,
+          turretAngle: 0,
           speed: 0,
           health: 1,
           maxHealth: 1,
@@ -84,6 +90,8 @@ export default function GameEngine({
       width: GRID_SIZE - 4,
       height: GRID_SIZE - 4,
       direction: 'UP',
+      angle: 0,
+      turretAngle: 0,
       speed: p1Tank.speed,
       health: p1Tank.health,
       maxHealth: p1Tank.health,
@@ -101,6 +109,8 @@ export default function GameEngine({
             width: GRID_SIZE - 4,
             height: GRID_SIZE - 4,
             direction: mode === 'VERSUS' ? 'DOWN' : 'UP',
+            angle: mode === 'VERSUS' ? Math.PI : 0,
+            turretAngle: mode === 'VERSUS' ? Math.PI : 0,
             speed: p2Tank.speed,
             health: p2Tank.health,
             maxHealth: p2Tank.health,
@@ -121,6 +131,8 @@ export default function GameEngine({
             width: GRID_SIZE - 4,
             height: GRID_SIZE - 4,
             direction: 'DOWN',
+            angle: Math.PI,
+            turretAngle: Math.PI,
             speed: (1.2 + (levelIndex * 0.15)) * diffMultiplier, 
             health: Math.ceil(2.5 * diffMultiplier),
             maxHealth: Math.ceil(2.5 * diffMultiplier),
@@ -150,7 +162,7 @@ export default function GameEngine({
     }, 100);
   }, [levelIndex, mode, difficulty, p1Tank, p2Tank, p1Color, p2Color]);
 
-  const checkCollision = (rect1: any, rect2: any, padding = 1) => {
+  const checkCollision = (rect1: any, rect2: any, padding = 4) => {
     return rect1.x + padding < rect2.x + rect2.width &&
            rect1.x + rect1.width - padding > rect2.x &&
            rect1.y + padding < rect2.y + rect2.height &&
@@ -161,7 +173,7 @@ export default function GameEngine({
     setGameState(prev => {
       if (!prev || prev.status !== 'PLAYING') return prev;
 
-      let { player1, player2, enemies, bullets, walls, powerups, score } = prev;
+      let { player1, player2, enemies, bullets, walls, water, powerups, score } = prev;
       const nextP1 = { ...player1 };
       const nextP2 = player2 ? { ...player2 } : undefined;
 
@@ -186,12 +198,32 @@ export default function GameEngine({
         });
       }
 
-      // Player 1 Controls (WASD + Q)
+      // Player 1 Aiming (Mouse)
+      const p1cx = nextP1.x + nextP1.width / 2;
+      const p1cy = nextP1.y + nextP1.height / 2;
+      nextP1.turretAngle = Math.atan2(mousePos.current.x - p1cx, -(mousePos.current.y - p1cy));
+
+      // Player 1 Controls (WASD)
+      let p1moveX = 0, p1moveY = 0;
+      if (keysPressed.current['w']) p1moveY -= 1;
+      if (keysPressed.current['s']) p1moveY += 1;
+      if (keysPressed.current['a']) p1moveX -= 1;
+      if (keysPressed.current['d']) p1moveX += 1;
+
       let p1dx = 0, p1dy = 0;
-      if (keysPressed.current['w']) { p1dy = -nextP1.speed; nextP1.direction = 'UP'; }
-      else if (keysPressed.current['s']) { p1dy = nextP1.speed; nextP1.direction = 'DOWN'; }
-      else if (keysPressed.current['a']) { p1dx = -nextP1.speed; nextP1.direction = 'LEFT'; }
-      else if (keysPressed.current['d']) { p1dx = nextP1.speed; nextP1.direction = 'RIGHT'; }
+      if (p1moveX !== 0 || p1moveY !== 0) {
+          const mag = Math.sqrt(p1moveX * p1moveX + p1moveY * p1moveY);
+          p1dx = (p1moveX / mag) * nextP1.speed;
+          p1dy = (p1moveY / mag) * nextP1.speed;
+          nextP1.angle = Math.atan2(p1moveX, -p1moveY);
+          
+          // Legacy direction for some parts that might still use it
+          if (Math.abs(p1moveX) > Math.abs(p1moveY)) {
+              nextP1.direction = p1moveX > 0 ? 'RIGHT' : 'LEFT';
+          } else {
+              nextP1.direction = p1moveY > 0 ? 'DOWN' : 'UP';
+          }
+      }
 
       const p1Collidables = [...walls, ...prev.water, ...enemies, ...(nextP2 ? [nextP2] : [])];
       
@@ -211,11 +243,26 @@ export default function GameEngine({
 
       // Player 2 Controls (Arrows + 1)
       if (nextP2) {
+        let p2moveX = 0, p2moveY = 0;
+        if (keysPressed.current['arrowup']) p2moveY -= 1;
+        if (keysPressed.current['arrowdown']) p2moveY += 1;
+        if (keysPressed.current['arrowleft']) p2moveX -= 1;
+        if (keysPressed.current['arrowright']) p2moveX += 1;
+
         let p2dx = 0, p2dy = 0;
-        if (keysPressed.current['arrowup']) { p2dy = -nextP2.speed; nextP2.direction = 'UP'; }
-        else if (keysPressed.current['arrowdown']) { p2dy = nextP2.speed; nextP2.direction = 'DOWN'; }
-        else if (keysPressed.current['arrowleft']) { p2dx = -nextP2.speed; nextP2.direction = 'LEFT'; }
-        else if (keysPressed.current['arrowright']) { p2dx = nextP2.speed; nextP2.direction = 'RIGHT'; }
+        if (p2moveX !== 0 || p2moveY !== 0) {
+            const mag = Math.sqrt(p2moveX * p2moveX + p2moveY * p2moveY);
+            p2dx = (p2moveX / mag) * nextP2.speed;
+            p2dy = (p2moveY / mag) * nextP2.speed;
+            nextP2.angle = Math.atan2(p2moveX, -p2moveY);
+            nextP2.turretAngle = nextP2.angle; // Non-mouse player turret follows body
+            
+            if (Math.abs(p2moveX) > Math.abs(p2moveY)) {
+                nextP2.direction = p2moveX > 0 ? 'RIGHT' : 'LEFT';
+            } else {
+                nextP2.direction = p2moveY > 0 ? 'DOWN' : 'UP';
+            }
+        }
 
         const p2Collidables = [...walls, ...prev.water, ...enemies, nextP1];
         
@@ -239,10 +286,8 @@ export default function GameEngine({
         let by = tank.y + tank.height / 2 - 4;
         const offset = tank.width / 2 + 8;
         
-        if (tank.direction === 'UP') by -= offset;
-        else if (tank.direction === 'DOWN') by += offset;
-        else if (tank.direction === 'LEFT') bx -= offset;
-        else if (tank.direction === 'RIGHT') bx += offset;
+        bx += Math.sin(tank.turretAngle) * offset;
+        by -= Math.cos(tank.turretAngle) * offset;
 
         return {
           id: `${ownerId}-b-${Math.random()}`,
@@ -250,6 +295,8 @@ export default function GameEngine({
           x: bx,
           y: by,
           direction: tank.direction,
+          angle: tank.turretAngle,
+          turretAngle: tank.turretAngle,
           speed: GAME_CONFIG.BULLET_SPEED,
           health: 1,
           maxHealth: 1,
@@ -290,10 +337,8 @@ export default function GameEngine({
       // Update Bullets
       const nextBullets = bullets.map(b => {
         const nb = { ...b };
-        if (b.direction === 'UP') nb.y -= b.speed;
-        else if (b.direction === 'DOWN') nb.y += b.speed;
-        else if (b.direction === 'LEFT') nb.x -= b.speed;
-        else if (b.direction === 'RIGHT') nb.x += b.speed;
+        nb.x += Math.sin(b.angle) * b.speed;
+        nb.y -= Math.cos(b.angle) * b.speed;
         return nb;
       }).filter(b => b.x > -20 && b.x < CANVAS_WIDTH + 20 && b.y > -20 && b.y < CANVAS_HEIGHT + 20);
 
@@ -332,8 +377,7 @@ export default function GameEngine({
                   nextEnemies.splice(i, 1);
                   if (b.ownerId.includes('player')) {
                     score += 100;
-                    onScoreUpdate(score);
-                    onPullUpdate(50000); // Give 50,000 Pull per kill to match "ming" scale
+                    // Move callback out of here
                   }
               }
               break;
@@ -369,22 +413,55 @@ export default function GameEngine({
       // Enemy AI
       const finalEnemies = nextEnemies.map(e => {
         const ne = { ...e };
-        if (Math.random() < 0.02) {
-          const dirs: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-          ne.direction = dirs[Math.floor(Math.random() * dirs.length)];
-        }
+        const dirs: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
+        const eCollidables = [...remWalls, ...water, nextP1, ...(nextP2 ? [nextP2] : []), ...nextEnemies.filter(o => o.id !== e.id)];
+        
         let ex = 0, ey = 0;
         if (ne.direction === 'UP') ey = -ne.speed;
         else if (ne.direction === 'DOWN') ey = ne.speed;
         else if (ne.direction === 'LEFT') ex = -ne.speed;
         else if (ne.direction === 'RIGHT') ex = ne.speed;
+        
         ne.x += ex; ne.y += ey;
 
-        const eCollidables = [...remWalls, ...prev.water, nextP1, ...(nextP2 ? [nextP2] : []), ...nextEnemies.filter(o => o.id !== e.id)];
-        if (eCollidables.some(w => checkCollision(ne, w)) || ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH || ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT) {
+        const hasCollision = eCollidables.some(w => checkCollision(ne, w)) || 
+                           ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH || 
+                           ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT;
+
+        if (hasCollision || Math.random() < 0.01) { // Change direction on collision or randomly
            ne.x -= ex; ne.y -= ey;
-           const dirs: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-           ne.direction = dirs[Math.floor(Math.random() * dirs.length)];
+           
+           // Shuffling directions to add some variety
+           const shuffledDirs = [...dirs].sort(() => Math.random() - 0.5);
+           let foundPath = false;
+           
+           for (const dir of shuffledDirs) {
+               let tx = 0, ty = 0;
+               if (dir === 'UP') ty = -ne.speed;
+               else if (dir === 'DOWN') ty = ne.speed;
+               else if (dir === 'LEFT') tx = -ne.speed;
+               else if (dir === 'RIGHT') tx = ne.speed;
+               
+               const testPos = { ...ne, x: ne.x + tx, y: ne.y + ty };
+               if (!eCollidables.some(w => checkCollision(testPos, w)) && 
+                   testPos.x >= 0 && testPos.x + testPos.width <= CANVAS_WIDTH && 
+                   testPos.y >= 0 && testPos.y + testPos.height <= CANVAS_HEIGHT) {
+                   ne.direction = dir;
+                   const angleMap = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
+                   ne.angle = angleMap[dir];
+                   ne.turretAngle = ne.angle;
+                   foundPath = true;
+                   break;
+               }
+           }
+           
+           // If no clear path found, just pick any direction to avoid freezing
+           if (!foundPath) {
+               ne.direction = dirs[Math.floor(Math.random() * dirs.length)];
+               const angleMap = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
+               ne.angle = angleMap[ne.direction];
+               ne.turretAngle = ne.angle;
+           }
         }
 
         if (Math.random() < (0.01 + levelIndex * 0.005)) { // Aggressive firing per level
@@ -419,10 +496,7 @@ export default function GameEngine({
       else if (finalEnemies.length === 0) gameStatus = 'VICTORY';
 
       if (gameStatus !== 'PLAYING') {
-          onGameOver();
-          if (gameStatus === 'VICTORY' && mode === 'SINGLE') {
-              onLevelWin();
-          }
+          // Callbacks moved to useEffect
       }
 
       return {
@@ -445,6 +519,34 @@ export default function GameEngine({
     return () => cancelAnimationFrame(requestRef.current!);
   }, [update]);
 
+  // Handle side effects of internal game state changes
+  useEffect(() => {
+    if (!gameState) {
+        lastPullUpdateScore.current = 0;
+        return;
+    }
+
+    // Track score updates
+    onScoreUpdate(gameState.score);
+    
+    // Trigger pull updates based on score increases (kills)
+    if (gameState.score > lastPullUpdateScore.current) {
+        const killCount = (gameState.score - lastPullUpdateScore.current) / 100;
+        if (killCount > 0) {
+            onPullUpdate(killCount * 50000);
+            lastPullUpdateScore.current = gameState.score;
+        }
+    }
+
+    if (gameState.status === 'GAMEOVER') {
+        onGameOver();
+    } else if (gameState.status === 'VICTORY') {
+        if (gameState.mode === 'SINGLE') {
+            onLevelWin();
+        }
+    }
+  }, [gameState?.status, gameState?.score]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         const k = e.key.toLowerCase();
@@ -460,11 +562,24 @@ export default function GameEngine({
         keysPressed.current[k] = false;
     };
 
+    const handleMouseMove = (e: MouseEvent) => {
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        const scaleX = CANVAS_WIDTH / rect.width;
+        const scaleY = CANVAS_HEIGHT / rect.height;
+        mousePos.current = {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
+        };
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousemove', handleMouseMove);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousemove', handleMouseMove);
     };
   }, []);
 
@@ -506,8 +621,7 @@ export default function GameEngine({
       const hw = b.width / 2;
       const hh = b.height / 2;
       ctx.translate(b.x + hw, b.y + hh);
-      const rot = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
-      ctx.rotate(rot[b.direction]);
+      ctx.rotate(b.angle);
       
       // Tear drop / Bullet shape
       ctx.moveTo(0, -6);
@@ -538,8 +652,10 @@ export default function GameEngine({
 
       ctx.save();
       ctx.translate(tank.x + tank.width / 2, tank.y + tank.height / 2);
-      const rot = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
-      ctx.rotate(rot[tank.direction]);
+      
+      // --- Draw Body ---
+      ctx.save();
+      ctx.rotate(tank.angle);
       
       // Shadow
       ctx.shadowBlur = 10;
@@ -557,6 +673,11 @@ export default function GameEngine({
       // Detail
       ctx.fillStyle = 'rgba(0,0,0,0.2)';
       ctx.fillRect(-tank.width/4, -tank.height/3, tank.width/2, tank.height/1.5);
+      ctx.restore();
+
+      // --- Draw Turret & Cannon ---
+      ctx.save();
+      ctx.rotate(tank.turretAngle);
 
       // Cannon
       ctx.fillStyle = '#333';
@@ -570,6 +691,7 @@ export default function GameEngine({
       ctx.fill();
       ctx.strokeStyle = '#222';
       ctx.stroke();
+      ctx.restore();
 
       ctx.restore();
 
@@ -612,6 +734,60 @@ export default function GameEngine({
       ctx.fillRect(b.x, b.y, b.width, b.height);
       ctx.globalAlpha = 1.0;
     });
+
+    // --- MINI-MAP RENDERING ---
+    if (miniMapRef.current) {
+      const mCtx = miniMapRef.current.getContext('2d');
+      if (mCtx) {
+        const mmWidth = 160;
+        const mmHeight = 120;
+        const scale = mmWidth / CANVAS_WIDTH;
+
+        mCtx.clearRect(0, 0, mmWidth, mmHeight);
+        mCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        mCtx.fillRect(0, 0, mmWidth, mmHeight);
+
+        // Draw Walls
+        mCtx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        gameState.walls.forEach(w => {
+           mCtx.fillRect(w.x * scale, w.y * scale, w.width * scale, w.height * scale);
+        });
+
+        // Draw Water
+        mCtx.fillStyle = '#0277BD55';
+        gameState.water.forEach(w => {
+           mCtx.fillRect(w.x * scale, w.y * scale, w.width * scale, w.height * scale);
+        });
+
+        // Draw Player 1
+        mCtx.fillStyle = p1Color;
+        mCtx.beginPath();
+        mCtx.arc(gameState.player1.x * scale + (gameState.player1.width/2 * scale), 
+                 gameState.player1.y * scale + (gameState.player1.height/2 * scale), 
+                 3, 0, Math.PI * 2);
+        mCtx.fill();
+
+        // Draw Player 2
+        if (gameState.player2 && gameState.player2.health > 0) {
+            mCtx.fillStyle = p2Color;
+            mCtx.beginPath();
+            mCtx.arc(gameState.player2.x * scale + (gameState.player2.width/2 * scale), 
+                     gameState.player2.y * scale + (gameState.player2.height/2 * scale), 
+                     3, 0, Math.PI * 2);
+            mCtx.fill();
+        }
+
+        // Draw Enemies
+        mCtx.fillStyle = '#f00';
+        gameState.enemies.forEach(e => {
+            mCtx.beginPath();
+            mCtx.arc(e.x * scale + (e.width/2 * scale), 
+                     e.y * scale + (e.height/2 * scale), 
+                     2, 0, Math.PI * 2);
+            mCtx.fill();
+        });
+      }
+    }
 
   }, [gameState]);
 
@@ -680,6 +856,25 @@ export default function GameEngine({
           <div className="bg-black/60 border border-white/10 backdrop-blur-sm px-3 py-1 rounded-sm flex flex-col">
              <span className="text-[8px] text-zinc-500 uppercase font-black">Dushmanlar</span>
              <span className="text-xl font-mono leading-none text-red-500">{gameState?.enemies.length || 0}</span>
+          </div>
+      </div>
+
+      {/* Mini-Map Overlay */}
+      <div className="absolute top-4 right-4 group">
+          <div className="bg-black/60 border border-white/10 backdrop-blur-sm p-1 rounded-sm overflow-hidden shadow-2xl">
+              <canvas 
+                ref={miniMapRef}
+                width={160}
+                height={120}
+                className="block opacity-80 group-hover:opacity-100 transition-opacity"
+              />
+              <div className="mt-1 flex justify-between items-center px-1">
+                  <span className="text-[10px] font-black text-zinc-500 uppercase tracking-tighter">Tactical Map</span>
+                  <div className="flex gap-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_5px_rgba(239,44,44,0.5)]" />
+                  </div>
+              </div>
           </div>
       </div>
     </div>

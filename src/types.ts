@@ -20,6 +20,8 @@ export interface GameEntity {
   width: number;
   height: number;
   direction: Direction;
+  angle: number; // In radians
+  turretAngle: number; // In radians
   speed: number;
   health: number;
   maxHealth: number;
