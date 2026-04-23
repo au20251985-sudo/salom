@@ -122,6 +122,8 @@ export default function GameEngine({
     const diffMultiplier = DIFFICULTIES[difficulty].multiplier;
     const enemyCount = mode === 'VERSUS' ? 0 : mode === 'TEAM' ? 2 : Math.ceil((levelIndex + 2) * diffMultiplier);
     const levelEnemies: GameEntity[] = [];
+    const aiTypes: Array<'STALKER' | 'SNIPER' | 'BOMBER'> = ['STALKER', 'SNIPER', 'BOMBER'];
+    
     for (let i = 0; i < enemyCount; i++) {
         levelEnemies.push({
             id: `e${i}`,
@@ -136,7 +138,10 @@ export default function GameEngine({
             speed: (1.2 + (levelIndex * 0.15)) * diffMultiplier, 
             health: Math.ceil(2.5 * diffMultiplier),
             maxHealth: Math.ceil(2.5 * diffMultiplier),
-            power: Math.ceil(1 * diffMultiplier)
+            power: Math.ceil(1 * diffMultiplier),
+            aiType: aiTypes[i % aiTypes.length],
+            lastPathUpdate: 0,
+            path: []
         });
     }
 
@@ -162,13 +167,99 @@ export default function GameEngine({
     }, 100);
   }, [levelIndex, mode, difficulty, p1Tank, p2Tank, p1Color, p2Color]);
 
-  const checkCollision = (rect1: any, rect2: any, padding = 4) => {
+  const checkCollision = (rect1: any, rect2: any, padding = 6) => {
     return rect1.x + padding < rect2.x + rect2.width &&
            rect1.x + rect1.width - padding > rect2.x &&
            rect1.y + padding < rect2.y + rect2.height &&
            rect1.y + rect1.height - padding > rect2.y;
   };
 
+  // Pathfinding Helper
+  const findPath = useCallback((start: {x: number, y: number}, target: {x: number, y: number}, walls: GameEntity[], water: GameEntity[]) => {
+    const startX = Math.floor(start.x / GRID_SIZE);
+    const startY = Math.floor(start.y / GRID_SIZE);
+    const targetX = Math.floor(target.x / GRID_SIZE);
+    const targetY = Math.floor(target.y / GRID_SIZE);
+
+    if (startX === targetX && startY === targetY) return [];
+
+    const levelMap = LEVELS[levelIndex] || LEVELS[0];
+    const MAP_HEIGHT = levelMap.length;
+    const MAP_WIDTH = levelMap[0].split(' ').length;
+
+    const grid: number[][] = Array(MAP_HEIGHT).fill(0).map(() => Array(MAP_WIDTH).fill(0));
+    walls.forEach(w => {
+      const x = Math.floor(w.x / GRID_SIZE);
+      const y = Math.floor(w.y / GRID_SIZE);
+      if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+        grid[y][x] = 1; // Obstacle
+      }
+    });
+    water.forEach(w => {
+        const x = Math.floor(w.x / GRID_SIZE);
+        const y = Math.floor(w.y / GRID_SIZE);
+        if (x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT) {
+          grid[y][x] = 1; // Obstacle
+        }
+      });
+
+    const openSet: any[] = [{ x: startX, y: startY, g: 0, h: Math.abs(startX - targetX) + Math.abs(startY - targetY), f: 0 }];
+    const closedSet = new Set<string>();
+    const parents = new Map<string, any>();
+
+    while (openSet.length > 0) {
+      openSet.sort((a, b) => a.f - b.f);
+      const current = openSet.shift();
+      const posKey = `${current.x},${current.y}`;
+
+      if (current.x === targetX && current.y === targetY) {
+        const path = [];
+        let temp = current;
+        while (parents.has(`${temp.x},${temp.y}`)) {
+          path.push({ x: temp.x * GRID_SIZE, y: temp.y * GRID_SIZE });
+          temp = parents.get(`${temp.x},${temp.y}`);
+        }
+        return path.reverse();
+      }
+
+      closedSet.add(posKey);
+
+      const neighbors = [
+        { x: current.x + 1, y: current.y },
+        { x: current.x - 1, y: current.y },
+        { x: current.x, y: current.y + 1 },
+        { x: current.x, y: current.y - 1 },
+      ];
+
+      for (const neighbor of neighbors) {
+        if (neighbor.x < 0 || neighbor.x >= MAP_WIDTH || neighbor.y < 0 || neighbor.y >= MAP_HEIGHT) continue;
+        if (grid[neighbor.y][neighbor.x] === 1 || closedSet.has(`${neighbor.x},${neighbor.y}`)) continue;
+
+        const gScore = current.g + 1;
+        let found = false;
+        for (const openNode of openSet) {
+          if (openNode.x === neighbor.x && openNode.y === neighbor.y) {
+            if (gScore < openNode.g) {
+              openNode.g = gScore;
+              openNode.f = openNode.g + openNode.h;
+              parents.set(`${neighbor.x},${neighbor.y}`, current);
+            }
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          const h = Math.abs(neighbor.x - targetX) + Math.abs(neighbor.y - targetY);
+          openSet.push({ x: neighbor.x, y: neighbor.y, g: gScore, h, f: gScore + h });
+          parents.set(`${neighbor.x},${neighbor.y}`, current);
+        }
+      }
+    }
+    return [];
+  }, [levelIndex]);
+
+  // Attack Patterns and AI varied behavior
   const update = useCallback((time: number) => {
     setGameState(prev => {
       if (!prev || prev.status !== 'PLAYING') return prev;
@@ -190,6 +281,8 @@ export default function GameEngine({
           width: 30,
           height: 30,
           direction: 'UP',
+          angle: 0,
+          turretAngle: 0,
           speed: 0,
           health: 1,
           maxHealth: 1,
@@ -217,7 +310,6 @@ export default function GameEngine({
           p1dy = (p1moveY / mag) * nextP1.speed;
           nextP1.angle = Math.atan2(p1moveX, -p1moveY);
           
-          // Legacy direction for some parts that might still use it
           if (Math.abs(p1moveX) > Math.abs(p1moveY)) {
               nextP1.direction = p1moveX > 0 ? 'RIGHT' : 'LEFT';
           } else {
@@ -227,7 +319,6 @@ export default function GameEngine({
 
       const p1Collidables = [...walls, ...prev.water, ...enemies, ...(nextP2 ? [nextP2] : [])];
       
-      // Separate X and Y movement to allow sliding along walls
       if (p1dx !== 0) {
           nextP1.x += p1dx;
           if (p1Collidables.some(w => checkCollision(nextP1, w)) || nextP1.x < 0 || nextP1.x + nextP1.width > CANVAS_WIDTH) {
@@ -255,7 +346,7 @@ export default function GameEngine({
             p2dx = (p2moveX / mag) * nextP2.speed;
             p2dy = (p2moveY / mag) * nextP2.speed;
             nextP2.angle = Math.atan2(p2moveX, -p2moveY);
-            nextP2.turretAngle = nextP2.angle; // Non-mouse player turret follows body
+            nextP2.turretAngle = nextP2.angle;
             
             if (Math.abs(p2moveX) > Math.abs(p2moveY)) {
                 nextP2.direction = p2moveX > 0 ? 'RIGHT' : 'LEFT';
@@ -300,7 +391,7 @@ export default function GameEngine({
           speed: GAME_CONFIG.BULLET_SPEED,
           health: 1,
           maxHealth: 1,
-          power: tank.power, // Bullet carries tank's power
+          power: tank.power,
           ownerId,
           width: 8,
           height: 8
@@ -349,7 +440,6 @@ export default function GameEngine({
 
       nextBullets.forEach(b => {
         let hit = false;
-        // Hit Walls
         for (let i = 0; i < remWalls.length; i++) {
           if (checkCollision(b, remWalls[i])) {
             hit = true;
@@ -357,18 +447,10 @@ export default function GameEngine({
             break;
           }
         }
-        // Hit Enemies (Don't hit self and don't hit other enemies if bot)
         if (!hit) {
           for (let i = 0; i < nextEnemies.length; i++) {
-            // Logic: If bullet is from player, it hits any enemy. 
-            // If bullet is from enemy, it only hits players (not self and not other enemies).
             const isEnemyBullet = b.ownerId.startsWith('e');
-            const targetIsCurrentEnemy = b.ownerId === nextEnemies[i].id;
-            
-            if (isEnemyBullet) {
-                // Enemy bullets skip all enemies (no friendly fire)
-                continue;
-            }
+            if (isEnemyBullet) continue;
 
             if (checkCollision(b, nextEnemies[i])) {
               hit = true;
@@ -377,16 +459,13 @@ export default function GameEngine({
                   nextEnemies.splice(i, 1);
                   if (b.ownerId.includes('player')) {
                     score += 100;
-                    // Move callback out of here
                   }
               }
               break;
             }
           }
         }
-        // Hit Players (Don't hit self)
         if (!hit && b.ownerId !== 'player1' && nextP1.health > 0 && checkCollision(b, nextP1)) {
-           // Skip friendly fire in TEAM mode
            if (!(mode === 'TEAM' && b.ownerId === 'player2')) {
               hit = true;
               if (nextP1.shield) {
@@ -397,7 +476,6 @@ export default function GameEngine({
            }
         }
         if (!hit && nextP2 && b.ownerId !== 'player2' && nextP2.health > 0 && checkCollision(b, nextP2)) {
-           // Skip friendly fire in TEAM mode
            if (!(mode === 'TEAM' && b.ownerId === 'player1')) {
               hit = true;
               if (nextP2.shield) {
@@ -410,63 +488,78 @@ export default function GameEngine({
         if (!hit) finalBullets.push(b);
       });
 
-      // Enemy AI
+      // --- ADVANCED ENEMY AI ---
       const finalEnemies = nextEnemies.map(e => {
         const ne = { ...e };
-        const dirs: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-        const eCollidables = [...remWalls, ...water, nextP1, ...(nextP2 ? [nextP2] : []), ...nextEnemies.filter(o => o.id !== e.id)];
+        const target = (mode === 'VERSUS' || (mode === 'TEAM' && Math.random() > 0.5)) && nextP2 && nextP2.health > 0 ? nextP2 : nextP1;
+        const distToTarget = Math.sqrt((ne.x - target.x)**2 + (ne.y - target.y)**2);
         
-        let ex = 0, ey = 0;
-        if (ne.direction === 'UP') ey = -ne.speed;
-        else if (ne.direction === 'DOWN') ey = ne.speed;
-        else if (ne.direction === 'LEFT') ex = -ne.speed;
-        else if (ne.direction === 'RIGHT') ex = ne.speed;
-        
-        ne.x += ex; ne.y += ey;
-
-        const hasCollision = eCollidables.some(w => checkCollision(ne, w)) || 
-                           ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH || 
-                           ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT;
-
-        if (hasCollision || Math.random() < 0.01) { // Change direction on collision or randomly
-           ne.x -= ex; ne.y -= ey;
-           
-           // Shuffling directions to add some variety
-           const shuffledDirs = [...dirs].sort(() => Math.random() - 0.5);
-           let foundPath = false;
-           
-           for (const dir of shuffledDirs) {
-               let tx = 0, ty = 0;
-               if (dir === 'UP') ty = -ne.speed;
-               else if (dir === 'DOWN') ty = ne.speed;
-               else if (dir === 'LEFT') tx = -ne.speed;
-               else if (dir === 'RIGHT') tx = ne.speed;
-               
-               const testPos = { ...ne, x: ne.x + tx, y: ne.y + ty };
-               if (!eCollidables.some(w => checkCollision(testPos, w)) && 
-                   testPos.x >= 0 && testPos.x + testPos.width <= CANVAS_WIDTH && 
-                   testPos.y >= 0 && testPos.y + testPos.height <= CANVAS_HEIGHT) {
-                   ne.direction = dir;
-                   const angleMap = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
-                   ne.angle = angleMap[dir];
-                   ne.turretAngle = ne.angle;
-                   foundPath = true;
-                   break;
-               }
-           }
-           
-           // If no clear path found, just pick any direction to avoid freezing
-           if (!foundPath) {
-               ne.direction = dirs[Math.floor(Math.random() * dirs.length)];
-               const angleMap = { UP: 0, RIGHT: Math.PI/2, DOWN: Math.PI, LEFT: -Math.PI/2 };
-               ne.angle = angleMap[ne.direction];
-               ne.turretAngle = ne.angle;
-           }
+        // Pathfinding update throttle
+        if (!ne.lastPathUpdate || time - ne.lastPathUpdate > 1000 || (ne.path && ne.path.length === 0)) {
+            ne.lastPathUpdate = time;
+            ne.path = findPath({ x: ne.x, y: ne.y }, { x: target.x, y: target.y }, remWalls, water);
         }
 
-        if (Math.random() < (0.01 + levelIndex * 0.005)) { // Aggressive firing per level
+        // Movement based on AI Type
+        let targetX = target.x;
+        let targetY = target.y;
+
+        if (ne.path && ne.path.length > 0) {
+            const nextNode = ne.path[0];
+            const distToNode = Math.sqrt((ne.x - nextNode.x)**2 + (ne.y - nextNode.y)**2);
+            if (distToNode < 5) {
+                ne.path.shift();
+            } else {
+                targetX = nextNode.x;
+                targetY = nextNode.y;
+            }
+        }
+
+        const angleToTarget = Math.atan2(targetX - ne.x, -(targetY - ne.y));
+        const angleToPlayer = Math.atan2(target.x - ne.x, -(target.y - ne.y));
+        
+        // Face movement direction
+        ne.angle = angleToTarget;
+        
+        // Attack Pattern: Varied turret behavior
+        if (ne.aiType === 'SNIPER') {
+            // Snipers always aim at player, but only move if too close or too far
+            ne.turretAngle = angleToPlayer;
+            if (distToTarget < 200) {
+                // Back away or strafe? Simple back away for now
+                ne.x -= Math.sin(ne.angle) * ne.speed;
+                ne.y += Math.cos(ne.angle) * ne.speed;
+            } else if (distToTarget > 400) {
+                ne.x += Math.sin(ne.angle) * ne.speed;
+                ne.y -= Math.cos(ne.angle) * ne.speed;
+            }
+        } else if (ne.aiType === 'BOMBER') {
+            // Bombers charge directly and shoot frequently
+            ne.turretAngle = angleToPlayer;
+            ne.x += Math.sin(ne.angle) * ne.speed * 1.2;
+            ne.y -= Math.cos(ne.angle) * ne.speed * 1.2;
+        } else { // STALKER
+            // Stalkers follow path and shoot when in line of sight
+            ne.turretAngle = angleToPlayer;
+            ne.x += Math.sin(ne.angle) * ne.speed;
+            ne.y -= Math.cos(ne.angle) * ne.speed;
+        }
+
+        // Shooting logic with varied attack patterns
+        const shootChance = ne.aiType === 'BOMBER' ? 0.05 : ne.aiType === 'SNIPER' ? 0.02 : 0.01;
+        if (Math.random() < (shootChance + levelIndex * 0.005)) {
              finalBullets.push(spawnBullet(ne, ne.id));
         }
+
+        // Collision correction for enemies
+        const eCollidables = [...remWalls, ...water, nextP1, ...(nextP2 ? [nextP2] : []), ...nextEnemies.filter(o => o.id !== e.id)];
+        if (eCollidables.some(w => checkCollision(ne, w)) || ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH || ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT) {
+            ne.x = e.x;
+            ne.y = e.y;
+            // If stuck, clear path to force recalculation
+            ne.path = [];
+        }
+
         return ne;
       });
 
@@ -708,7 +801,12 @@ export default function GameEngine({
       ctx.fillRect(tank.x, tank.y - 8, tank.width * (tank.health / tank.maxHealth), 3);
     };
 
-    gameState.enemies.forEach(e => drawTank(e, TANK_COLORS.ENEMY, 'BOT'));
+    gameState.enemies.forEach(e => {
+        let color = TANK_COLORS.ENEMY;
+        if (e.aiType === 'SNIPER') color = TANK_COLORS.ENEMY_FAST;
+        else if (e.aiType === 'BOMBER') color = TANK_COLORS.ENEMY_HEAVY;
+        drawTank(e, color, e.aiType || 'BOT');
+    });
     drawTank(gameState.player1, p1Color, 'P1');
     if (gameState.player2) drawTank(gameState.player2, p2Color, 'P2');
 

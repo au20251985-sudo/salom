@@ -30,6 +30,10 @@ export interface GameEntity {
   shield?: boolean;
   doubleShot?: boolean;
   powerupType?: 'SHIELD' | 'DOUBLE_SHOT';
+  // AI related
+  aiType?: 'STALKER' | 'SNIPER' | 'BOMBER';
+  lastPathUpdate?: number;
+  path?: Point[];
 }
 
 export interface Bullet extends GameEntity {
