@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { GameState, Direction, GRID_SIZE, CANVAS_WIDTH, CANVAS_HEIGHT, Bullet, GameEntity, TankModel } from '../../types';
+import { GameState, Direction, GRID_SIZE, CANVAS_WIDTH, CANVAS_HEIGHT, Bullet, GameEntity, TankModel, GameSettings } from '../../types';
 import { TANK_COLORS, WALL_COLORS, GAME_CONFIG, TANK_MODELS, DIFFICULTIES } from '../../constants';
 import { LEVELS } from '../../levels';
 import { Trophy } from 'lucide-react';
@@ -21,7 +21,8 @@ export default function GameEngine({
   onNextLevel,
   onLevelWin,
   p1Tank = TANK_MODELS[0],
-  p2Tank = TANK_MODELS[0]
+  p2Tank = TANK_MODELS[0],
+  settings
 }: { 
   mode: 'SINGLE' | 'VERSUS' | 'TEAM', 
   levelIndex: number, 
@@ -34,7 +35,8 @@ export default function GameEngine({
   onNextLevel: () => void,
   onLevelWin: () => void,
   p1Tank?: TankModel,
-  p2Tank?: TankModel
+  p2Tank?: TankModel,
+  settings: GameSettings
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniMapRef = useRef<HTMLCanvasElement>(null);
@@ -45,8 +47,37 @@ export default function GameEngine({
   const lastShotP1 = useRef<number>(0);
   const lastShotP2 = useRef<number>(0);
   const lastPowerupSpawn = useRef<number>(0);
+  const shakeRef = useRef<number>(0);
 
   const lastPullUpdateScore = useRef<number>(0);
+
+  const triggerShake = useCallback((amount: number) => {
+    if (settings.screenShake) {
+        shakeRef.current = Math.max(shakeRef.current, amount);
+    }
+  }, [settings.screenShake]);
+
+  const createExplosion = useCallback((x: number, y: number, color: string, count: number = 10) => {
+    if (!settings.particles) return [];
+    
+    const newParticles = [];
+    for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 3 + 1;
+        newParticles.push({
+            id: `p-${Math.random()}`,
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 1.0,
+            maxLife: 1.0,
+            color,
+            size: Math.random() * 3 + 1
+        });
+    }
+    return newParticles;
+  }, [settings.particles]);
 
   // Initialize Game
   useEffect(() => {
@@ -125,11 +156,20 @@ export default function GameEngine({
     const aiTypes: Array<'STALKER' | 'SNIPER' | 'BOMBER'> = ['STALKER', 'SNIPER', 'BOMBER'];
     
     for (let i = 0; i < enemyCount; i++) {
+        // Find a safe spawn point (randomly or sequentially)
+        let sx = 2 + (i * 3) % 15;
+        let sy = 1;
+        
+        // Ensure spawn point is not a wall (Basic check)
+        if (levelMap[sy] && levelMap[sy][sx * 2] === 'S') {
+           sx += 1; // Shift if hits the middle steel wall pattern
+        }
+
         levelEnemies.push({
             id: `e${i}`,
             type: 'ENEMY',
-            x: GRID_SIZE * (2 + (i * 3) % 15),
-            y: GRID_SIZE * 1,
+            x: GRID_SIZE * sx,
+            y: GRID_SIZE * sy,
             width: GRID_SIZE - 4,
             height: GRID_SIZE - 4,
             direction: 'DOWN',
@@ -155,6 +195,7 @@ export default function GameEngine({
       water,
       bushes,
       powerups: [],
+      particles: [],
       score: 0,
       pull: 0,
       level: levelIndex + 1,
@@ -172,6 +213,27 @@ export default function GameEngine({
            rect1.x + rect1.width - padding > rect2.x &&
            rect1.y + padding < rect2.y + rect2.height &&
            rect1.y + rect1.height - padding > rect2.y;
+  };
+
+  const hasLineOfSight = (start: {x: number, y: number}, end: {x: number, y: number}, walls: GameEntity[]) => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.ceil(dist / 5);
+    
+    for (let i = 1; i < steps; i++) {
+        const px = start.x + (dx * i) / steps;
+        const py = start.y + (dy * i) / steps;
+        
+        // Only steel walls block line of sight completely for shooting intent
+        const hitWall = walls.find(w => 
+            w.type === 'WALL_STEEL' &&
+            px >= w.x && px <= w.x + w.width &&
+            py >= w.y && py <= w.y + w.height
+        );
+        if (hitWall) return false;
+    }
+    return true;
   };
 
   // Pathfinding Helper
@@ -443,7 +505,13 @@ export default function GameEngine({
         for (let i = 0; i < remWalls.length; i++) {
           if (checkCollision(b, remWalls[i])) {
             hit = true;
-            if (remWalls[i].type === 'WALL_BRICK') remWalls.splice(i, 1);
+            triggerShake(2);
+            if (remWalls[i].type === 'WALL_BRICK') {
+                const brickPos = { x: remWalls[i].x + remWalls[i].width/2, y: remWalls[i].y + remWalls[i].height/2 };
+                const explosion = createExplosion(brickPos.x, brickPos.y, '#A52A2A', 5);
+                setGameState(curr => curr ? { ...curr, particles: [...curr.particles, ...explosion] } : null);
+                remWalls.splice(i, 1);
+            }
             break;
           }
         }
@@ -454,9 +522,13 @@ export default function GameEngine({
 
             if (checkCollision(b, nextEnemies[i])) {
               hit = true;
+              triggerShake(5);
+              const explosion = createExplosion(b.x, b.y, '#f00', 8);
               nextEnemies[i].health -= b.power;
               if (nextEnemies[i].health <= 0) {
+                  const bigExplosion = createExplosion(nextEnemies[i].x + nextEnemies[i].width/2, nextEnemies[i].y + nextEnemies[i].height/2, '#FF4500', 15);
                   nextEnemies.splice(i, 1);
+                  setGameState(curr => curr ? { ...curr, particles: [...curr.particles, ...explosion, ...bigExplosion] } : null);
                   if (b.ownerId.includes('player')) {
                     score += 100;
                   }
@@ -468,6 +540,7 @@ export default function GameEngine({
         if (!hit && b.ownerId !== 'player1' && nextP1.health > 0 && checkCollision(b, nextP1)) {
            if (!(mode === 'TEAM' && b.ownerId === 'player2')) {
               hit = true;
+              triggerShake(8);
               if (nextP1.shield) {
                   nextP1.shield = false;
               } else {
@@ -478,6 +551,7 @@ export default function GameEngine({
         if (!hit && nextP2 && b.ownerId !== 'player2' && nextP2.health > 0 && checkCollision(b, nextP2)) {
            if (!(mode === 'TEAM' && b.ownerId === 'player1')) {
               hit = true;
+              triggerShake(8);
               if (nextP2.shield) {
                   nextP2.shield = false;
               } else {
@@ -494,6 +568,8 @@ export default function GameEngine({
         const target = (mode === 'VERSUS' || (mode === 'TEAM' && Math.random() > 0.5)) && nextP2 && nextP2.health > 0 ? nextP2 : nextP1;
         const distToTarget = Math.sqrt((ne.x - target.x)**2 + (ne.y - target.y)**2);
         
+        const canSeePlayer = hasLineOfSight({ x: ne.x + ne.width/2, y: ne.y + ne.height/2 }, { x: target.x + target.width/2, y: target.y + target.height/2 }, remWalls);
+
         // Pathfinding update throttle
         if (!ne.lastPathUpdate || time - ne.lastPathUpdate > 1000 || (ne.path && ne.path.length === 0)) {
             ne.lastPathUpdate = time;
@@ -503,6 +579,7 @@ export default function GameEngine({
         // Movement based on AI Type
         let targetX = target.x;
         let targetY = target.y;
+        let isWandering = false;
 
         if (ne.path && ne.path.length > 0) {
             const nextNode = ne.path[0];
@@ -513,6 +590,16 @@ export default function GameEngine({
                 targetX = nextNode.x;
                 targetY = nextNode.y;
             }
+        } else if (!canSeePlayer) {
+            // No path and cannot see player? Wander randomly
+            isWandering = true;
+            if (Math.random() < 0.02) {
+                ne.direction = (['UP', 'DOWN', 'LEFT', 'RIGHT'] as Direction[])[Math.floor(Math.random() * 4)];
+            }
+            if (ne.direction === 'UP') targetY = ne.y - 100;
+            else if (ne.direction === 'DOWN') targetY = ne.y + 100;
+            else if (ne.direction === 'LEFT') targetX = ne.x - 100;
+            else if (ne.direction === 'RIGHT') targetX = ne.x + 100;
         }
 
         const angleToTarget = Math.atan2(targetX - ne.x, -(targetY - ne.y));
@@ -521,43 +608,72 @@ export default function GameEngine({
         // Face movement direction
         ne.angle = angleToTarget;
         
-        // Attack Pattern: Varied turret behavior
+        // Calculate intent
+        let moveX = 0;
+        let moveY = 0;
+
         if (ne.aiType === 'SNIPER') {
-            // Snipers always aim at player, but only move if too close or too far
             ne.turretAngle = angleToPlayer;
             if (distToTarget < 200) {
-                // Back away or strafe? Simple back away for now
-                ne.x -= Math.sin(ne.angle) * ne.speed;
-                ne.y += Math.cos(ne.angle) * ne.speed;
+                moveX = -Math.sin(ne.angle) * ne.speed;
+                moveY = Math.cos(ne.angle) * ne.speed;
             } else if (distToTarget > 400) {
-                ne.x += Math.sin(ne.angle) * ne.speed;
-                ne.y -= Math.cos(ne.angle) * ne.speed;
+                moveX = Math.sin(ne.angle) * ne.speed;
+                moveY = -Math.cos(ne.angle) * ne.speed;
             }
         } else if (ne.aiType === 'BOMBER') {
-            // Bombers charge directly and shoot frequently
             ne.turretAngle = angleToPlayer;
-            ne.x += Math.sin(ne.angle) * ne.speed * 1.2;
-            ne.y -= Math.cos(ne.angle) * ne.speed * 1.2;
+            const moveAngle = canSeePlayer && (!ne.path || ne.path.length === 0) ? angleToPlayer : ne.angle;
+            moveX = Math.sin(moveAngle) * ne.speed * 1.2;
+            moveY = -Math.cos(moveAngle) * ne.speed * 1.2;
         } else { // STALKER
-            // Stalkers follow path and shoot when in line of sight
             ne.turretAngle = angleToPlayer;
-            ne.x += Math.sin(ne.angle) * ne.speed;
-            ne.y -= Math.cos(ne.angle) * ne.speed;
+            moveX = Math.sin(ne.angle) * ne.speed;
+            moveY = -Math.cos(ne.angle) * ne.speed;
         }
 
-        // Shooting logic with varied attack patterns
-        const shootChance = ne.aiType === 'BOMBER' ? 0.05 : ne.aiType === 'SNIPER' ? 0.02 : 0.01;
-        if (Math.random() < (shootChance + levelIndex * 0.005)) {
-             finalBullets.push(spawnBullet(ne, ne.id));
-        }
-
-        // Collision correction for enemies
+        // Apply movement with sliding collision
         const eCollidables = [...remWalls, ...water, nextP1, ...(nextP2 ? [nextP2] : []), ...nextEnemies.filter(o => o.id !== e.id)];
-        if (eCollidables.some(w => checkCollision(ne, w)) || ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH || ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT) {
-            ne.x = e.x;
-            ne.y = e.y;
-            // If stuck, clear path to force recalculation
+        
+        const prevX = ne.x;
+        const prevY = ne.y;
+
+        // Try move X
+        ne.x += moveX;
+        if (eCollidables.some(w => checkCollision(ne, w)) || ne.x < 0 || ne.x + ne.width > CANVAS_WIDTH) {
+            ne.x = prevX;
+        }
+
+        // Try move Y
+        ne.y += moveY;
+        if (eCollidables.some(w => checkCollision(ne, w)) || ne.y < 0 || ne.y + ne.height > CANVAS_HEIGHT) {
+            ne.y = prevY;
+        }
+
+        // Stuck detection & recovery
+        const actualMoveDist = Math.sqrt((ne.x - prevX)**2 + (ne.y - prevY)**2);
+        if (actualMoveDist < 0.1) {
+            ne.stuckFrames = (ne.stuckFrames || 0) + 1;
+        } else {
+            ne.stuckFrames = 0;
+        }
+
+        if (ne.stuckFrames > 45) {
             ne.path = [];
+            ne.lastPathUpdate = 0;
+            ne.stuckFrames = 0;
+            // Nudge significantly to break out of corners
+            ne.x += (Math.random() - 0.5) * 15;
+            ne.y += (Math.random() - 0.5) * 15;
+            // Randomize direction to force a new movement attempt
+            ne.direction = (['UP', 'DOWN', 'LEFT', 'RIGHT'] as Direction[])[Math.floor(Math.random() * 4)];
+        }
+
+        // Shooting logic with varied attack patterns - ONLY SHOOT IF HAS LINE OF SIGHT
+        const shootChance = ne.aiType === 'BOMBER' ? 0.05 : ne.aiType === 'SNIPER' ? 0.02 : 0.01;
+
+        if (canSeePlayer && Math.random() < (shootChance + levelIndex * 0.005)) {
+             finalBullets.push(spawnBullet(ne, ne.id));
         }
 
         return ne;
@@ -577,6 +693,14 @@ export default function GameEngine({
         }
         return true;
       });
+
+      // Update Particles
+      const nextParticles = (prev.particles || []).map(p => ({
+        ...p,
+        x: p.x + p.vx,
+        y: p.y + p.vy,
+        life: p.life - 0.02
+      })).filter(p => p.life > 0);
 
       const p1Alive = nextP1.health > 0;
       const p2Alive = nextP2 ? nextP2.health > 0 : false;
@@ -600,6 +724,7 @@ export default function GameEngine({
         bullets: finalBullets,
         walls: remWalls,
         powerups: remainingPowerups,
+        particles: nextParticles,
         score,
         status: gameStatus
       };
@@ -682,8 +807,30 @@ export default function GameEngine({
     if (!ctx) return;
 
     ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // Apply Screen Shake
+    if (shakeRef.current > 0.1) {
+        ctx.save();
+        const shakeX = (Math.random() - 0.5) * shakeRef.current;
+        const shakeY = (Math.random() - 0.5) * shakeRef.current;
+        ctx.translate(shakeX, shakeY);
+        shakeRef.current *= 0.9;
+    }
+
     ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // Grid (optional background grid if showGrid enabled)
+    if (settings.showGrid) {
+       ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+       ctx.lineWidth = 1;
+       for (let x = 0; x <= CANVAS_WIDTH; x += GRID_SIZE) {
+          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_HEIGHT); ctx.stroke();
+       }
+       for (let y = 0; y <= CANVAS_HEIGHT; y += GRID_SIZE) {
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_WIDTH, y); ctx.stroke();
+       }
+    }
 
     gameState.walls.forEach(w => {
       ctx.fillStyle = w.type === 'WALL_BRICK' ? WALL_COLORS.BRICK : WALL_COLORS.STEEL;
@@ -832,6 +979,19 @@ export default function GameEngine({
       ctx.fillRect(b.x, b.y, b.width, b.height);
       ctx.globalAlpha = 1.0;
     });
+
+    // Particles
+    (gameState.particles || []).forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+        ctx.restore();
+    });
+
+    if (shakeRef.current > 0.1) {
+        ctx.restore();
+    }
 
     // --- MINI-MAP RENDERING ---
     if (miniMapRef.current) {

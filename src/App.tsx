@@ -5,13 +5,14 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, Shield, Zap, Target, Swords, Play, Github, LayoutGrid, Lock, Coins, ShoppingBag, Car, Gamepad2, Gamepad, Dices, X } from 'lucide-react';
+import { Trophy, Shield, Zap, Target, Swords, Play, Github, LayoutGrid, Lock, Coins, ShoppingBag, Car, Gamepad2, Gamepad, Dices, X, Settings, Volume2, VolumeX, Monitor } from 'lucide-react';
 import GameEngine from './components/Game/GameEngine';
 import CarRacingGame from './components/Games/CarRacingGame';
 import PuzzleGame from './components/Games/PuzzleGame';
 import TetrisGame from './components/Games/TetrisGame';
 import SnakeGame from './components/Games/SnakeGame';
 import { TANK_MODELS, AVAILABLE_COLORS, DIFFICULTIES } from './constants';
+import { GameSettings } from './types';
 
 export default function App() {
   const [score, setScore] = useState(0);
@@ -29,6 +30,17 @@ export default function App() {
   const [p2TankIdx, setP2TankIdx] = useState(0);
   const [showShop, setShowShop] = useState(false);
   const [showHangar, setShowHangar] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<GameSettings>(() => {
+    const saved = localStorage.getItem('tank_settings');
+    return saved ? JSON.parse(saved) : {
+      musicVolume: 0.5,
+      sfxVolume: 0.7,
+      screenShake: true,
+      particles: true,
+      showGrid: true
+    };
+  });
   const [showDifficultySelect, setShowDifficultySelect] = useState(false);
   const [selectedDifficulty, setSelectedDifficulty] = useState<'EASY' | 'NORMAL' | 'HARD'>('NORMAL');
   const [p1Color, setP1Color] = useState('#4CAF50');
@@ -38,6 +50,14 @@ export default function App() {
     return saved ? JSON.parse(saved) : ['green'];
   });
   const [activeGame, setActiveGame] = useState<'TANK' | 'RACE' | 'PUZZLE' | 'TETRIS' | 'SNAKE'>('TANK');
+
+  const updateSettings = (partial: Partial<GameSettings>) => {
+    setSettings(prev => {
+      const next = { ...prev, ...partial };
+      localStorage.setItem('tank_settings', JSON.stringify(next));
+      return next;
+    });
+  };
 
   const handleColorPurchase = (colorId: string, cost: number) => {
     if (pull >= cost && !purchasedColorIds.includes(colorId)) {
@@ -127,13 +147,19 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#080808] text-zinc-300 font-sans selection:bg-red-600 selection:text-white overflow-x-hidden">
       {/* Tactical Grid Background */}
-      <div className="fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden">
+      <div className={`fixed inset-0 pointer-events-none opacity-[0.03] overflow-hidden transition-opacity duration-700 ${settings.showGrid ? 'opacity-[0.03]' : 'opacity-0'}`}>
          <div className="absolute inset-0" style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/50 to-black" />
       </div>
 
       {/* Floating Header - Repositioned to Bottom Right Area */}
-      <div className="fixed bottom-8 right-8 z-50 p-4 pointer-events-none">
+      <div className="fixed bottom-8 right-8 z-50 flex flex-col gap-4 items-end pointer-events-none">
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="pointer-events-auto w-14 h-14 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-full text-zinc-400 hover:text-white hover:border-red-600 transition-all shadow-xl group"
+          >
+              <Settings className="w-6 h-6 group-hover:rotate-90 transition-transform duration-500" />
+          </button>
           <button 
             onClick={() => { setShowGamesMenu(true); }}
             className="pointer-events-auto flex items-center gap-3 bg-zinc-900/90 backdrop-blur-xl border-2 border-red-600/50 px-6 py-3 rounded-full text-xs font-black uppercase tracking-widest text-white hover:bg-red-600 hover:border-red-600 transition-all group shadow-[0_0_30px_rgba(220,38,38,0.2)] hover:shadow-[0_0_30px_rgba(220,38,38,0.4)]"
@@ -447,6 +473,7 @@ export default function App() {
                    onNextLevel={handleNextLevel}
                    p1Tank={TANK_MODELS[p1TankIdx]}
                    p2Tank={TANK_MODELS[p2TankIdx]}
+                   settings={settings}
                  />
                  
                  <div className="text-[9px] font-mono text-zinc-600 uppercase tracking-widest text-center mt-4">
@@ -629,6 +656,131 @@ export default function App() {
               </div>
            </div>
         </footer>
+
+        {/* Settings Overlay */}
+        <AnimatePresence>
+          {showSettings && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/95 backdrop-blur-lg"
+            >
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="w-full max-w-xl bg-zinc-950 border border-zinc-800 p-8 shadow-2xl relative overflow-hidden"
+              >
+                 <div className="absolute top-0 right-0 w-32 h-32 bg-red-600/5 blur-[60px]" />
+                 
+                 <div className="relative z-10">
+                   <div className="flex justify-between items-center mb-8 border-b border-zinc-900 pb-6">
+                      <div className="flex items-center gap-4">
+                         <div className="p-3 bg-zinc-900 border border-zinc-800 rounded-sm">
+                            <Settings className="w-6 h-6 text-red-600" />
+                         </div>
+                         <div>
+                            <h2 className="text-3xl font-black uppercase italic tracking-tighter text-white">SOZLAMALAR</h2>
+                            <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-[0.2em] mt-1">Sizning taktika markazingiz</p>
+                         </div>
+                      </div>
+                      <button 
+                        onClick={() => setShowSettings(false)}
+                        className="w-10 h-10 flex items-center justify-center bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all"
+                      >
+                         <X className="w-5 h-5" />
+                      </button>
+                   </div>
+
+                   <div className="space-y-8">
+                      {/* Audio Section */}
+                      <div className="space-y-6">
+                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] flex items-center gap-3">
+                           <Volume2 className="w-3 h-3 text-red-600" /> AUDIO TIZIMI
+                        </h3>
+                        
+                        <div className="space-y-4">
+                           <div className="space-y-2">
+                              <div className="flex justify-between items-center text-[10px] uppercase font-mono mb-1">
+                                 <span className="text-zinc-500">Musiqa Balandligi</span>
+                                 <span className="text-white">{Math.round(settings.musicVolume * 100)}%</span>
+                              </div>
+                              <input 
+                                type="range" min="0" max="1" step="0.01" 
+                                value={settings.musicVolume}
+                                onChange={(e) => updateSettings({ musicVolume: parseFloat(e.target.value) })}
+                                className="w-full h-1 bg-zinc-900 appearance-none cursor-pointer accent-red-600"
+                              />
+                           </div>
+                           <div className="space-y-2">
+                              <div className="flex justify-between items-center text-[10px] uppercase font-mono mb-1">
+                                 <span className="text-zinc-500">Ovoz Effektlari</span>
+                                 <span className="text-white">{Math.round(settings.sfxVolume * 100)}%</span>
+                              </div>
+                              <input 
+                                type="range" min="0" max="1" step="0.01" 
+                                value={settings.sfxVolume}
+                                onChange={(e) => updateSettings({ sfxVolume: parseFloat(e.target.value) })}
+                                className="w-full h-1 bg-zinc-900 appearance-none cursor-pointer accent-red-600"
+                              />
+                           </div>
+                        </div>
+                      </div>
+
+                      {/* Visual Section */}
+                      <div className="space-y-6">
+                        <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] flex items-center gap-3">
+                           <Monitor className="w-3 h-3 text-red-600" /> VIZUAL EFFEKTLAR
+                        </h3>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                           <button 
+                             onClick={() => updateSettings({ screenShake: !settings.screenShake })}
+                             className={`flex items-center justify-between p-4 border transition-all ${settings.screenShake ? 'bg-red-600/10 border-red-600 text-white' : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                           >
+                              <span className="text-[10px] font-black uppercase">Ekran Silkinishi</span>
+                              <div className={`w-8 h-4 rounded-full relative transition-colors ${settings.screenShake ? 'bg-red-600' : 'bg-zinc-800'}`}>
+                                 <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${settings.screenShake ? 'right-0.5' : 'left-0.5'}`} />
+                              </div>
+                           </button>
+
+                           <button 
+                             onClick={() => updateSettings({ particles: !settings.particles })}
+                             className={`flex items-center justify-between p-4 border transition-all ${settings.particles ? 'bg-red-600/10 border-red-600 text-white' : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                           >
+                              <span className="text-[10px] font-black uppercase">Zarralar (Particles)</span>
+                              <div className={`w-8 h-4 rounded-full relative transition-colors ${settings.particles ? 'bg-red-600' : 'bg-zinc-800'}`}>
+                                 <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${settings.particles ? 'right-0.5' : 'left-0.5'}`} />
+                              </div>
+                           </button>
+
+                           <button 
+                             onClick={() => updateSettings({ showGrid: !settings.showGrid })}
+                             className={`flex items-center justify-between p-4 border transition-all ${settings.showGrid ? 'bg-red-600/10 border-red-600 text-white' : 'bg-zinc-900/50 border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                           >
+                              <span className="text-[10px] font-black uppercase">Torsimon Fon</span>
+                              <div className={`w-8 h-4 rounded-full relative transition-colors ${settings.showGrid ? 'bg-red-600' : 'bg-zinc-800'}`}>
+                                 <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${settings.showGrid ? 'right-0.5' : 'left-0.5'}`} />
+                              </div>
+                           </button>
+                        </div>
+                      </div>
+                   </div>
+
+                   <div className="mt-12 flex justify-end">
+                      <button 
+                        onClick={() => setShowSettings(false)}
+                        className="bg-white text-black px-8 py-3 font-black uppercase italic italic tracking-tighter text-sm hover:bg-yellow-500 transition-colors"
+                      >
+                         Saqlash va Chiqish
+                      </button>
+                   </div>
+                 </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Hangar / Shop Overlay */}
         <AnimatePresence>

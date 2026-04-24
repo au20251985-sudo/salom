@@ -34,6 +34,7 @@ export interface GameEntity {
   aiType?: 'STALKER' | 'SNIPER' | 'BOMBER';
   lastPathUpdate?: number;
   path?: Point[];
+  stuckFrames?: number;
 }
 
 export interface Bullet extends GameEntity {
@@ -51,6 +52,14 @@ export interface TankModel {
   description: string;
 }
 
+export interface GameSettings {
+  musicVolume: number;
+  sfxVolume: number;
+  screenShake: boolean;
+  particles: boolean;
+  showGrid: boolean;
+}
+
 export interface GameState {
   player1: GameEntity;
   player2?: GameEntity;
@@ -61,10 +70,23 @@ export interface GameState {
   bushes: GameEntity[];
   water: GameEntity[];
   powerups: GameEntity[];
+  particles: Particle[];
   score: number;
   pull: number;
   level: number;
   status: 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' | 'VICTORY';
+}
+
+export interface Particle {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  size: number;
 }
 
 export const GRID_SIZE = 40;

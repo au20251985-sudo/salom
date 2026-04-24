@@ -13,9 +13,23 @@ export default function SnakeGame({ difficulty = 'NORMAL' }: { difficulty?: 'EAS
   const [score, setScore] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isEating, setIsEating] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const speed = difficulty === 'EASY' ? 200 : difficulty === 'HARD' ? 80 : 120;
+
+  const generateFood = useCallback((currentSnake: {x: number, y: number}[]) => {
+    let newPos;
+    let isOnSnake;
+    do {
+      newPos = {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE)
+      };
+      isOnSnake = currentSnake.some(seg => seg.x === newPos.x && seg.y === newPos.y);
+    } while (isOnSnake);
+    return newPos;
+  }, []);
 
   const moveSnake = useCallback(() => {
     if (!isPlaying || gameOver) return;
@@ -42,10 +56,9 @@ export default function SnakeGame({ difficulty = 'NORMAL' }: { difficulty?: 'EAS
       // Food collision
       if (newHead.x === food.x && newHead.y === food.y) {
         setScore(s => s + 10);
-        setFood({
-          x: Math.floor(Math.random() * GRID_SIZE),
-          y: Math.floor(Math.random() * GRID_SIZE)
-        });
+        setIsEating(true);
+        setTimeout(() => setIsEating(false), 200);
+        setFood(generateFood(newSnake));
       } else {
         newSnake.pop();
       }
@@ -107,7 +120,11 @@ export default function SnakeGame({ difficulty = 'NORMAL' }: { difficulty?: 'EAS
             <motion.div 
               key={i}
               initial={false}
-              animate={{ x: seg.x * CELL_SIZE, y: seg.y * CELL_SIZE }}
+              animate={{ 
+                x: seg.x * CELL_SIZE, 
+                y: seg.y * CELL_SIZE,
+                scale: i === 0 && isEating ? 1.4 : 1
+              }}
               className={`absolute rounded-[2px] z-10 ${i === 0 ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.5)]' : 'bg-green-700/80'}`}
               style={{ width: CELL_SIZE - 2, height: CELL_SIZE - 2 }}
             />
